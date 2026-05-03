@@ -6,8 +6,14 @@ from ultralytics import YOLO
 import numpy as np
 from typing import List, Dict
 
-# Load custom road damage model (YOLOv8 trained on infrastructure)
-model = YOLO("best.pt")
+# Lazy-load road damage model to save RAM on startup
+model = None
+
+def get_yolo_model():
+    global model
+    if model is None:
+        model = YOLO("best.pt")
+    return model
 
 # Mapping for the specialized RDD-India classes
 DAMAGE_MAP = {
@@ -66,10 +72,14 @@ def calculate_hash_difference(hash1_str: str, hash2_str: str) -> int:
 # Multi-Model AI Ensemble for Comprehensive Road Intelligence
 class AIMediator:
     def __init__(self):
-        self.models = {
-            "primary_damage": YOLO("best.pt"),
-        }
+        self.models = {}
         self.active_models = ["primary_damage"]
+
+    def get_model(self, key):
+        if key not in self.models:
+            if key == "primary_damage":
+                self.models[key] = YOLO("best.pt")
+        return self.models.get(key)
 
     def analyze(self, image_data: bytes) -> Dict:
         try:
@@ -81,7 +91,7 @@ class AIMediator:
             max_severity = 1
             
             for key in self.active_models:
-                model = self.models[key]
+                model = self.get_model(key)
                 if not model: continue
                 
                 results = model(img, conf=0.25)
