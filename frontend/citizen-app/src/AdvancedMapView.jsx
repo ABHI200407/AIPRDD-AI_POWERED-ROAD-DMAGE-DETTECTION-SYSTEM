@@ -36,7 +36,7 @@ import {
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 
-const API = 'http://localhost:8000/api/v1'
+const API = 'http://192.168.253.155:8000/api/v1'
 const OSRM = 'https://router.project-osrm.org/route/v1/driving'
 
 const VEHICLES = [
@@ -134,6 +134,23 @@ function formatDistance(meters) {
   return `${Math.round(meters)} m`
 }
 
+import 'leaflet.heat'
+
+function HeatmapLayer({ points }) {
+  const map = useMap()
+  useEffect(() => {
+    if (!points || points.length === 0) return
+    const heat = L.heatLayer(points, {
+      radius: 25,
+      blur: 15,
+      maxZoom: 17,
+      gradient: { 0.4: 'rgba(56, 189, 248, 0.4)', 0.65: 'rgba(245, 158, 11, 0.7)', 1: 'rgba(239, 68, 68, 0.9)' }
+    }).addTo(map)
+    return () => { if (map && heat) map.removeLayer(heat) }
+  }, [map, points])
+  return null
+}
+
 function routeHazardScore(geometry, reports, vehicleId) {
   const vehicle = getVehicle(vehicleId)
   let hazardCount = 0
@@ -174,23 +191,42 @@ function getBoundsQuery(map) {
   })
 }
 
-function MapBridge({ onMove, onTap, mapRef }) {
+function MapBridge({ onMove, onTap, onInteraction, onLocationFound, onStatusChange, mapRef }) {
   const map = useMap()
 
   useMapEvents({
+    movestart() {
+      onInteraction()
+    },
     moveend() {
       onMove(map)
+    },
+    zoomstart() {
+      onInteraction()
     },
     zoomend() {
       onMove(map)
     },
     click(event) {
       onTap(event.latlng, map)
+    },
+    locationfound(e) {
+      onLocationFound([e.latlng.lat, e.latlng.lng]);
+      onStatusChange('granted');
+    },
+    locationerror(e) {
+      onStatusChange('denied');
     }
   })
 
   useEffect(() => {
     mapRef.current = map
+    // Force map to recognize its size
+    setTimeout(() => {
+      map.invalidateSize()
+      map.locate({ setView: true, maxZoom: 15, enableHighAccuracy: true })
+    }, 250)
+    
     window.setTimeout(() => onMove(map), 0)
   }, [map, mapRef, onMove])
 
@@ -209,7 +245,8 @@ function LayerButton({ item, active, onClick }) {
 
 export default function AdvancedMapView({ myReports = [], onReport }) {
   const [baseLayer, setBaseLayer] = useState('light')
-  const [enabledDetails, setEnabledDetails] = useState({ hazards: true, transit: false, biking: false, labels: true })
+  const [enabledDetails, setEnabledDetails] = useState({ hazards: true, heatmap: true, transit: false, biking: false, labels: true })
+  const [isFreeLook, setIsFreeLook] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [measureMode, setMeasureMode] = useState(false)
   const [travelMode, setTravelMode] = useState(false)
@@ -224,6 +261,7 @@ export default function AdvancedMapView({ myReports = [], onReport }) {
   const [searchText, setSearchText] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [loading, setLoading] = useState(false)
+  const [locationStatus, setLocationStatus] = useState('unknown')
   const [status, setStatus] = useState('Move the map to load nearby reports.')
   const mapRef = useRef(null)
   const fetchId = useRef(0)
@@ -234,17 +272,63 @@ export default function AdvancedMapView({ myReports = [], onReport }) {
     [myReports]
   )
   const displayedReports = reports.length ? reports : normalizedLocalReports
-  const measureDistance = measurePoints.length === 2
-    ? L.latLng(measurePoints[0]).distanceTo(measurePoints[1])
-    : null
+  const [measureDistance, setMeasureDistance] = useState(null)
   const userIcon = useMemo(() => createUserIcon(), [])
   const pinIcon = useMemo(() => createPinIcon(), [])
 
+  const heatmapPoints = useMemo(() => {
+    return displayedReports.map(r => [r.latitude, r.longitude, r.severity * 0.2]);
+  }, [displayedReports]);
+
+  const suspensionStats = useMemo(() => {
+    if (!routeData) return null;
+    const safetyScore = Math.max(0, 100 - (routeData.hazardCount * 15 / (routeData.distance / 1000 + 0.1))).toFixed(0);
+    const wearCost = ((routeData.distance / 1000) * 1.5 + (routeData.hazardCount * 8)).toFixed(0);
+    return { safetyScore, wearCost };
+  }, [routeData]);
+
+  const nearestHazard = useMemo(() => {
+    if (!routeData || !routeData.geometry || !isNavigating) return null
+    let closest = null
+    let minDist = Infinity
+    
+    displayedReports.forEach(report => {
+      const dist = L.latLng(userPos).distanceTo([report.latitude, report.longitude])
+      if (dist < 1000 && dist > 10) { 
+        let onRoute = false
+        for (let i=0; i<routeData.geometry.length; i+=10) {
+           if (L.latLng(routeData.geometry[i]).distanceTo([report.latitude, report.longitude]) < 60) {
+             onRoute = true; break;
+           }
+        }
+        if (onRoute && dist < minDist) {
+          minDist = dist
+          closest = { ...report, distance: Math.round(dist) }
+        }
+      }
+    })
+    return closest
+  }, [routeData, userPos, displayedReports, isNavigating])
+
+  const lastAnnouncedHazard = useRef(null)
   useEffect(() => {
-    if (isNavigating && mapRef.current) {
+    if (isNavigating && nearestHazard && window.speechSynthesis) {
+       if (nearestHazard.distance <= 250 && nearestHazard.id !== lastAnnouncedHazard.current) {
+          lastAnnouncedHazard.current = nearestHazard.id
+          const type = (nearestHazard.type || 'hazard').replace('_', ' ').toLowerCase()
+          const severityText = nearestHazard.severity >= 4 ? 'severe ' : ''
+          const text = `Caution: ${severityText}${type} ${nearestHazard.distance} meters ahead.`
+          window.speechSynthesis.cancel()
+          window.speechSynthesis.speak(new SpeechSynthesisUtterance(text))
+       }
+    }
+  }, [isNavigating, nearestHazard])
+
+  useEffect(() => {
+    if (isNavigating && mapRef.current && !isFreeLook) {
       mapRef.current.setView(userPos, 17, { animate: true })
     }
-  }, [isNavigating, userPos])
+  }, [isNavigating, userPos, isFreeLook])
 
   const refreshReports = useCallback(async (map = mapRef.current) => {
     if (!map) return
@@ -296,7 +380,7 @@ export default function AdvancedMapView({ myReports = [], onReport }) {
     setLoading(true)
     setStatus('Calculating road travel time...')
     try {
-      const url = `${OSRM}/${userPos[1]},${userPos[0]};${nextDestination.lon},${nextDestination.lat}?overview=full&geometries=geojson&steps=false&alternatives=true`
+      const url = `${OSRM}/${userPos[1]},${userPos[0]};${nextDestination.lon},${nextDestination.lat}?overview=full&geometries=geojson&steps=false&alternatives=true&radiuses=150;150`
       const response = await fetch(url)
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const data = await response.json()
@@ -323,6 +407,8 @@ export default function AdvancedMapView({ myReports = [], onReport }) {
         vehicle: nextVehicle
       })
       setDestination(nextDestination)
+      setIsNavigating(true)
+      setIsFreeLook(false)
       setTravelMode(false)
       setStatus(`${nextRouteMode.toLowerCase()} ${selectedVehicle.label.toLowerCase()} route: ${formatDistance(best.candidate.distance)}, ${Math.max(1, Math.round(adjustedDuration / 60))} min, ${best.hazardMeta.hazardCount} risks.`)
       if (mapRef.current && best.geometry.length) {
@@ -355,14 +441,23 @@ export default function AdvancedMapView({ myReports = [], onReport }) {
   }
 
   const handleMapTap = (latlng) => {
-    if (measureMode) {
-      setMeasurePoints((points) => points.length >= 2 ? [[latlng.lat, latlng.lng]] : [...points, [latlng.lat, latlng.lng]])
-      return
-    }
-
     if (travelMode) {
+      setDestination({ lat: latlng.lat, lon: latlng.lng, name: 'Pinned destination' })
       calculateRoute({ lat: latlng.lat, lon: latlng.lng, name: 'Pinned destination' })
+      setMeasurePoints([])
+      setIsFreeLook(false)
+    } else if (measureMode) {
+      const newPoints = [...measurePoints, [latlng.lat, latlng.lng]]
+      setMeasurePoints(newPoints)
+      if (newPoints.length > 1) {
+        const dist = L.latLng(newPoints[newPoints.length - 2]).distanceTo(newPoints[newPoints.length - 1])
+        setMeasureDistance((prev) => (prev || 0) + dist)
+      }
     }
+  }
+
+  const handleMapInteraction = () => {
+    if (isNavigating) setIsFreeLook(true)
   }
 
   const toggleDetail = (id) => {
@@ -370,7 +465,22 @@ export default function AdvancedMapView({ myReports = [], onReport }) {
   }
 
   return (
-    <div className="advanced-map-screen">
+    <div className="advanced-map-container" style={{ position: 'relative' }}>
+      <div style={{ position: 'absolute', top: 16, left: 12, right: 12, zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: 'none' }}>
+        {locationStatus === 'denied' && (
+          <div style={{ pointerEvents: 'auto', background: 'rgba(239, 68, 68, 0.9)', backdropFilter: 'blur(10px)', padding: '12px 20px', borderRadius: '12px', color: 'white', display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 8px 32px rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.2)' }}>
+            <AlertTriangle size={20} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 800, fontSize: '0.85rem' }}>Location Access Denied</div>
+              <div style={{ fontSize: '0.75rem', opacity: 0.9 }}>Enable GPS in your browser settings to see your live position.</div>
+            </div>
+            <button onClick={() => setLocationStatus('unknown')} style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer' }}>
+              <X size={18} />
+            </button>
+          </div>
+        )}
+      </div>
+
       <MapContainer
         center={userPos}
         zoom={14}
@@ -378,7 +488,14 @@ export default function AdvancedMapView({ myReports = [], onReport }) {
         style={{ width: '100%', height: '100%' }}
         aria-label="Advanced road safety map"
       >
-        <MapBridge onMove={refreshReports} onTap={handleMapTap} mapRef={mapRef} />
+        <MapBridge 
+          onMove={refreshReports} 
+          onTap={handleMapTap} 
+          onInteraction={handleMapInteraction}
+          onLocationFound={setUserPos} 
+          onStatusChange={setLocationStatus}
+          mapRef={mapRef} 
+        />
         <TileLayer key={activeBase.id} url={activeBase.url} attribution={activeBase.attribution} maxZoom={activeBase.maxZoom} />
         {enabledDetails.labels && baseLayer === 'satellite' && (
           <TileLayer
@@ -395,6 +512,7 @@ export default function AdvancedMapView({ myReports = [], onReport }) {
             opacity={0.72}
           />
         )}
+        {enabledDetails.heatmap && <HeatmapLayer points={heatmapPoints} />}
         {enabledDetails.biking && (
           <TileLayer
             url="https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png"
@@ -518,60 +636,81 @@ export default function AdvancedMapView({ myReports = [], onReport }) {
             })}
           </div>
         </div>
-      </div>
-
-      <div className="advanced-map-toolbar">
-        <button type="button" onClick={locateUser} aria-label="Recenter live location"><LocateFixed size={20} /></button>
-        <button type="button" className={drawerOpen ? 'active' : ''} onClick={() => setDrawerOpen(true)} aria-label="Map details"><Layers size={20} /></button>
-        <button type="button" className={travelMode ? 'active' : ''} onClick={() => { setTravelMode(!travelMode); setMeasureMode(false) }} aria-label="Travel time"><Navigation size={20} /></button>
-        <button type="button" className={measureMode ? 'active' : ''} onClick={() => { setMeasureMode(!measureMode); setTravelMode(false); setMeasurePoints([]) }} aria-label="Measure distance"><Ruler size={20} /></button>
-      </div>
-
-      <button type="button" className="advanced-report-btn" onClick={onReport}>
-        <Camera size={18} />
-        <span>Report</span>
-      </button>
-
-      <div className="advanced-status-card">
-        <div>
-          <strong>{status}</strong>
-          <span>
-            {measureMode && (measureDistance ? `Measured ${formatDistance(measureDistance)}` : 'Tap two points to measure.')}
-            {travelMode && !routeData && 'Tap a destination or search above.'}
-            {!measureMode && !travelMode && `${displayedReports.length} visible reports.`}
-          </span>
-        </div>
-        {routeData && (
-          <div className="travel-chip">
-            <strong>{Math.max(1, Math.round(routeData.duration / 60))} min</strong>
-            <span>{formatDistance(routeData.distance)} | {routeData.hazardCount} risks | {routeData.roadQuality}/5</span>
+        {nearestHazard && (
+          <div className={`live-alert-panel ${nearestHazard.severity >= 4 ? '' : 'warning'}`}>
+            <AlertTriangle className="icon" size={24} />
+            <div>
+              <strong>⚠️ {nearestHazard.severity >= 4 ? 'Severe ' : ''}{nearestHazard.type.replaceAll('_', ' ')} Ahead</strong>
+              <span>Est. distance: {nearestHazard.distance}m</span>
+            </div>
           </div>
         )}
       </div>
 
-      {routeData && (
-        <div className="advanced-nav-card">
-          <button
-            type="button"
-            onClick={() => {
-              setIsNavigating(!isNavigating)
-              if (!isNavigating && mapRef.current) {
-                mapRef.current.setView(userPos, 17, { animate: true })
-              }
-            }}
-          >
-            {isNavigating ? <Square size={17} /> : <Navigation size={17} />}
-            <span>{isNavigating ? 'End navigation' : 'Start navigation'}</span>
-          </button>
-          <a
-            href={`https://www.google.com/maps/dir/?api=1&origin=${userPos[0]},${userPos[1]}&destination=${destination.lat},${destination.lon}&travelmode=driving`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            Open Maps
-          </a>
+      <div className="advanced-bottom-wrapper" style={{ pointerEvents: 'none' }}>
+        <div style={{ width: '100%', pointerEvents: 'auto' }}>
+          <div className="advanced-map-toolbar">
+            <button type="button" onClick={() => { locateUser(); setIsFreeLook(false) }} className={(!isFreeLook && isNavigating) ? 'active' : ''} aria-label="Recenter live location">
+              {isFreeLook ? <Navigation size={20} /> : <LocateFixed size={20} />}
+            </button>
+            <button type="button" className={drawerOpen ? 'active' : ''} onClick={() => setDrawerOpen(true)} aria-label="Map details"><Layers size={20} /></button>
+            <button type="button" className={travelMode ? 'active' : ''} onClick={() => { setTravelMode(!travelMode); setMeasureMode(false) }} aria-label="Travel time"><Navigation size={20} /></button>
+            <button type="button" className={measureMode ? 'active' : ''} onClick={() => { setMeasureMode(!measureMode); setTravelMode(false); setMeasurePoints([]) }} aria-label="Measure distance"><Ruler size={20} /></button>
+          </div>
         </div>
-      )}
+
+        <div className="advanced-report-row" style={{ pointerEvents: 'auto' }}>
+          <button type="button" className="advanced-report-btn" onClick={onReport}>
+            <Camera size={20} />
+            <span>+ Report</span>
+          </button>
+        </div>
+
+        {routeData && (
+          <div className="advanced-nav-card" style={{ pointerEvents: 'auto' }}>
+            <button
+              type="button"
+              onClick={() => {
+                setIsNavigating(!isNavigating)
+                if (!isNavigating && mapRef.current) {
+                  mapRef.current.setView(userPos, 17, { animate: true })
+                }
+              }}
+            >
+              {isNavigating ? <Square size={17} /> : <Navigation size={17} />}
+              <span>{isNavigating ? 'End navigation' : 'Start navigation'}</span>
+            </button>
+            <a
+              href={`https://www.google.com/maps/dir/?api=1&origin=${userPos[0]},${userPos[1]}&destination=${destination.lat},${destination.lon}&travelmode=driving`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open Maps
+            </a>
+          </div>
+        )}
+
+        <div className="advanced-status-card" style={{ pointerEvents: 'auto' }}>
+          <div>
+            <strong>{status}</strong>
+            <span>
+              {measureMode && (measureDistance ? `Measured ${formatDistance(measureDistance)}` : 'Tap two points to measure.')}
+              {travelMode && !routeData && 'Tap a destination or search above.'}
+              {!measureMode && !travelMode && `${displayedReports.length} visible reports.`}
+            </span>
+          </div>
+          {routeData && (
+            <div className="travel-chip">
+              <strong>{Math.max(1, Math.round(routeData.duration / 60))} min</strong>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, marginTop: 4 }}>
+                <span style={{ color: 'var(--primary)', fontWeight: 800 }}>{suspensionStats.safetyScore}% Smooth</span>
+                <span style={{ color: '#fca5a5' }}>₹{suspensionStats.wearCost} wear</span>
+              </div>
+              <span>{formatDistance(routeData.distance)} | {routeData.hazardCount} risks | {routeData.roadQuality}/5</span>
+            </div>
+          )}
+        </div>
+      </div>
 
       {drawerOpen && (
         <div className="map-details-sheet" role="dialog" aria-label="Map details">

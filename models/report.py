@@ -39,7 +39,11 @@ class RoadDamageReport(Base):
     road_segment_name = Column(String)
     fraud_score = Column(Float, default=0.0)
     is_flagged = Column(Boolean, default=False)
-    source = Column(String, default="CITIZEN")  # CITIZEN | DRONE_AI | ACCELEROMETER | LIDAR
+    source = Column(String, default="CITIZEN")  # CITIZEN | DRONE_AI | ACCELEROMETER | LIDAR | SENTINEL
+    
+    # Sentinel Elite Features
+    area_name = Column(String)  # Neighborhood (Hitech City, Abids, etc.)
+    is_impact_verified = Column(Boolean, default=False) # Vision + Vibration match
 
 
 class MaintenanceHistory(Base):

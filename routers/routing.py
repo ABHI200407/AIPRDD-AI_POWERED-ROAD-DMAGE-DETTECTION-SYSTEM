@@ -6,8 +6,9 @@ from database import get_db
 from services.smart_routing import calculate_route_penalty, VEHICLE_FACTORS
 from services.road_health import score_road_segment, score_named_roads
 from models.report import RoadDamageReport
+from services.auth import get_current_user
 
-router = APIRouter(prefix="/api/v1/routing", tags=["Smart Routing"])
+router = APIRouter(prefix="/api/v1/routing", tags=["Smart Routing"], dependencies=[Depends(get_current_user)])
 
 
 # ─── Vehicle-Specific Smart Route ─────────────────────────────────────────────

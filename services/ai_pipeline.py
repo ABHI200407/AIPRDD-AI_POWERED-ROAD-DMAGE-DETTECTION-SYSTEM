@@ -9,19 +9,32 @@ from typing import List, Dict
 # Load custom road damage model (YOLOv8 trained on infrastructure)
 model = YOLO("best.pt")
 
-# Mapping for the specialized classes (D00, D10, etc.)
-# D00: Longitudinal Crack, D10: Transverse Crack, D20: Alligator Crack, D40: Pothole
+# Mapping for the specialized RDD-India classes
 DAMAGE_MAP = {
     0: "Longitudinal Crack",
-    1: "Transverse Crack",
-    2: "Lateral Crack",
-    3: "Complex Crack",
+    1: "Minor Longitudinal Crack",
+    2: "Transverse Crack",
+    3: "Minor Transverse Crack",
     4: "Alligator Crack",
     5: "Pothole",
-    6: "Manhole",
+    6: "Rutting/Manhole",
     7: "Blurred Line",
     8: "Faded Markings",
-    9: "Obstruction"
+    9: "Road Marking Issue"
+}
+
+# Severity weights for different classes
+SEVERITY_WEIGHTS = {
+    0: 2, # Longitudinal Crack
+    1: 1, # Minor Longitudinal Crack
+    2: 2, # Transverse Crack
+    3: 1, # Minor Transverse Crack
+    4: 4, # Alligator Crack
+    5: 5, # Pothole
+    6: 3, # Rutting/Manhole
+    7: 1, # Blurred Line
+    8: 1, # Faded Markings
+    9: 2  # Road Marking Issue
 }
 
 def get_image_hash(image_url: str) -> str:
@@ -55,24 +68,15 @@ class AIMediator:
     def __init__(self):
         self.models = {
             "primary_damage": YOLO("best.pt"),
-            # Placeholder for future models
-            # "traffic_flow": None,
-            # "road_signs": None
         }
         self.active_models = ["primary_damage"]
-
-    def add_model(self, key: str, path: str):
-        try:
-            self.models[key] = YOLO(path)
-            if key not in self.active_models:
-                self.active_models.append(key)
-            return True
-        except:
-            return False
 
     def analyze(self, image_data: bytes) -> Dict:
         try:
             img = Image.open(io.BytesIO(image_data))
+            img_w, img_h = img.size
+            img_area = img_w * img_h
+            
             all_detections = []
             max_severity = 1
             
@@ -86,19 +90,30 @@ class AIMediator:
                         cls_id = int(box.cls[0])
                         conf = float(box.conf[0])
                         
-                        # Use DAMAGE_MAP if it's the primary damage model
-                        if key == "primary_damage":
-                            label = DAMAGE_MAP.get(cls_id, model.names[cls_id])
-                            severity = 5 if cls_id == 5 else (4 if cls_id == 4 else 2)
-                        else:
-                            label = f"[{key}] {model.names[cls_id]}"
-                            severity = 3
+                        # Get human-readable label
+                        label = DAMAGE_MAP.get(cls_id, model.names[cls_id])
+                        
+                        # Calculate Severity
+                        # 1. Base severity from class
+                        base_severity = SEVERITY_WEIGHTS.get(cls_id, 2)
+                        
+                        # 2. Dynamic boost based on Bounding Box Area
+                        # (Bigger damage = Higher severity)
+                        b = box.xyxy[0].tolist()
+                        bbox_area = (b[2] - b[0]) * (b[3] - b[1])
+                        area_ratio = bbox_area / img_area
+                        
+                        severity = base_severity
+                        if area_ratio > 0.05: # If damage takes > 5% of frame
+                            severity = min(5, severity + 1)
+                        if area_ratio > 0.15: # If damage takes > 15% of frame
+                            severity = 5
                             
                         all_detections.append({
                             "type": label,
-                            "confidence": conf,
-                            "severity": severity,
-                            "bbox": box.xyxy[0].tolist(),
+                            "confidence": round(conf, 2),
+                            "severity": int(severity),
+                            "bbox": b,
                             "source": key
                         })
                         max_severity = max(max_severity, severity)
@@ -106,9 +121,9 @@ class AIMediator:
             return {
                 "status": "success",
                 "detections": all_detections,
-                "suggested_severity": max_severity,
+                "suggested_severity": int(max_severity),
                 "active_pipeline": self.active_models,
-                "model_version": "Ensemble-v2-MultiStage"
+                "model_version": "RDD-India-v1"
             }
         except Exception as e:
             return {"status": "error", "message": str(e), "suggested_severity": 3}

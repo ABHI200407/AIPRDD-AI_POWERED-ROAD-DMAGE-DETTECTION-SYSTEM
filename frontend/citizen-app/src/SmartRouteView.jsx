@@ -18,7 +18,7 @@ import L from 'leaflet'
 import NavigationMap from './components/NavigationMap'
 import 'leaflet/dist/leaflet.css'
 
-const API = 'http://localhost:8000/api/v1'
+const API = 'http://192.168.253.155:8000/api/v1'
 const OSRM = 'https://router.project-osrm.org/route/v1'
 
 const VEHICLES = [

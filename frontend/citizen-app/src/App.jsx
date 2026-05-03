@@ -3,7 +3,12 @@ import { MapContainer, TileLayer, CircleMarker, Popup, Marker, useMap, ScaleCont
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import MarkerClusterGroup from 'react-leaflet-cluster'
-import { Map, Camera, User, AlertTriangle, CheckCircle, Upload, Mic, Clock, Star, Shield, Wifi, WifiOff, Navigation, Layout, Trophy, MapPin, FileText, Settings } from 'lucide-react'
+import LoginView from './LoginView'
+import Onboarding from './Onboarding'
+import { useAuth } from './AuthContext'
+import RewardsView from './RewardsView'
+import DashcamView from './DashcamView'
+import SentinelView from './SentinelView'
 import SmartRouteView from './SmartRouteView'
 import AdvancedMapView from './AdvancedMapView'
 import PersonalDashboard from './PersonalDashboard'
@@ -12,9 +17,11 @@ import LeaderboardView from './LeaderboardView'
 import ClaimHelper from './ClaimHelper'
 import CommuteView from './CommuteView'
 import ARView from './ARView'
+import { Map, Camera, User, AlertTriangle, CheckCircle, Upload, Mic, Clock, Star, Shield, Wifi, WifiOff, Navigation, Layout, Trophy, MapPin, FileText, Settings, X, Gift, LogIn, Play } from 'lucide-react'
+import { auth } from './firebase'
 import './App.css'
 
-const API = 'http://localhost:8000/api/v1'
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1'
 
 // ─── OFFLINE QUEUE (IndexedDB-like via localStorage) ───────────────────────
 const QUEUE_KEY = 'rd_offline_queue'
@@ -23,6 +30,15 @@ const addToQueue = (report) => {
   const q = getQueue(); q.push({ ...report, _offline: true, _id: Date.now() }); localStorage.setItem(QUEUE_KEY, JSON.stringify(q))
 }
 const clearQueue = () => localStorage.setItem(QUEUE_KEY, '[]')
+
+const fetchWithAuth = async (url, options = {}) => {
+  const headers = { ...options.headers };
+  if (auth.currentUser) {
+    const token = await auth.currentUser.getIdToken();
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return fetch(url, { ...options, headers });
+}
 
 // ─── BADGES CONFIG ──────────────────────────────────────────────────────────
 const BADGES = [
@@ -89,6 +105,9 @@ function LocateButton() {
 }
 
 export default function App() {
+  const { user, logout, loginAsGuest } = useAuth()
+  const [showOnboarding, setShowOnboarding] = useState(() => !localStorage.getItem('alive_onboarded'))
+  
   const [activeTab, setActiveTab] = useState('map')
   const [activeSubTab, setActiveSubTab] = useState('main')
   const [isOnline, setIsOnline] = useState(navigator.onLine)
@@ -102,6 +121,14 @@ export default function App() {
   const [photoPreview, setPhotoPreview] = useState(null)
   const [submitState, setSubmitState] = useState('idle')
   const [verifyTarget, setVerifyTarget] = useState(null)
+  const [isDashcamOpen, setIsDashcamOpen] = useState(false)
+  const [isSentinelOpen, setIsSentinelOpen] = useState(false)
+  const [liveAlert, setLiveAlert] = useState(null)
+  
+  const handleOnboardingComplete = () => {
+    localStorage.setItem('alive_onboarded', 'true')
+    setShowOnboarding(false)
+  }
   
   // Tier-1: Shadow Drive & AR State
   const [isShadowActive, setIsShadowActive] = useState(false)
@@ -116,12 +143,14 @@ export default function App() {
       const variance = Math.sqrt(x*x + y*y + z*z) / 9.8 - 1 // Normalized variance
       setAccelVariance(Math.abs(variance))
       
-      if (Math.abs(variance) > 0.4) {
+      if (Math.abs(variance) > 0.75) {
         // High vibration detected — potentially a pothole!
-        // In a real app, we'd send this to the backend with GPS
+        const now = Date.now()
+        if (now - (lastShadowFix || 0) > 8000) { // 8-second throttle
+          setLastShadowFix(now)
+          handleAutoReport(variance)
+        }
       }
-    }
-
     if (window.DeviceMotionEvent) {
       window.addEventListener('devicemotion', handleMotion)
     } else {
@@ -134,6 +163,73 @@ export default function App() {
 
     return () => window.removeEventListener('devicemotion', handleMotion)
   }, [isShadowActive])
+
+  useEffect(() => {
+    const socket = new WebSocket(`ws://${window.location.host}/ws/citizen`);
+    socket.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'HAZARD_ALERT') {
+        setLiveAlert(msg);
+        setTimeout(() => setLiveAlert(null), 10000); // 10s warning
+      }
+    };
+    return () => socket.close();
+  }, [])
+
+  const handleAutoReport = async (severityOrIntensity, forcedType = null) => {
+    const isAi = forcedType !== null;
+    console.log(isAi ? `🤖 AI_VISION: ${forcedType} detected. Logging...` : "🚀 SENSOR_IMU: Sudden impact detected. Auto-reporting...")
+    
+    const loc = await getCurrentReportLocation()
+    const earned = isAi ? 20 : 15 
+    
+    const finalSeverity = isAi ? severityOrIntensity : (severityOrIntensity > 1.2 ? 5 : 3);
+    const finalType = forcedType || 'UNEVEN_SURFACE';
+
+    const report = {
+      id: (isAi ? 'AI-' : 'IMU-') + Date.now(),
+      type: finalType,
+      severity: finalSeverity,
+      lat: loc.latitude,
+      lon: loc.longitude,
+      submitted_at: new Date().toLocaleString(),
+      status: navigator.onLine ? 'SUBMITTED' : 'QUEUED_OFFLINE',
+      points: earned,
+      source: isAi ? 'AI_VISION' : 'SENSOR_IMU'
+    }
+
+    if (navigator.onLine) {
+      try {
+        await fetchWithAuth(`${API}/reports`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: user?.id || 'anonymous',
+            timestamp_captured: new Date().toISOString(),
+            location: loc,
+            assessment: { damage_type: finalType, ai_suggested_severity: finalSeverity },
+            telemetry: isAi ? {} : { g_force_z: severityOrIntensity }
+          })
+        })
+      } catch (e) {
+        addToQueue(report)
+      }
+    } else {
+      addToQueue(report)
+    }
+
+    // Update UI state
+    setMyReports(prev => {
+      const updated = [report, ...prev];
+      localStorage.setItem('rd_reports', JSON.stringify(updated));
+      return updated;
+    });
+    setUserPoints(prev => {
+      const newPts = prev + earned;
+      localStorage.setItem('rd_points', newPts);
+      return newPts;
+    });
+  }
 
   useEffect(() => {
     const goOnline = () => { setIsOnline(true); syncOfflineQueue() }
@@ -150,7 +246,7 @@ export default function App() {
     for (const report of queue) {
       const { _offline, _id, ...payload } = report
       try {
-        await fetch(`${API}/reports`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        await fetchWithAuth(`${API}/reports`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
         synced++
       } catch {}
     }
@@ -176,7 +272,7 @@ export default function App() {
 
     try {
       if (isOnline) {
-        const res = await fetch(`${API}/reports`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        const res = await fetchWithAuth(`${API}/reports`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
         if (!res.ok) throw new Error()
       } else {
         addToQueue(payload)
@@ -209,6 +305,14 @@ export default function App() {
   const progress = nextBadge ? ((userPoints - (getBadge(userPoints - 1)?.minPts || 0)) / (nextBadge.minPts - (getBadge(userPoints - 1)?.minPts || 0))) * 100 : 100
 
   const DAMAGE_TYPES = ['POTHOLE', 'CRACK', 'DEBRIS', 'UNEVEN_SURFACE']
+
+  if (showOnboarding) {
+    return <Onboarding onComplete={handleOnboardingComplete} />
+  }
+
+  if (!user) {
+    return <LoginView onGuest={loginAsGuest} />
+  }
 
   return (
     <div className="app">
@@ -334,7 +438,25 @@ export default function App() {
 
         {activeTab === 'report' && (
           <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 20, paddingBottom: 100 }}>
-            <h3>Report Road Damage</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <h3 style={{ margin: 0 }}>New Road Report</h3>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button 
+                  onClick={() => setIsDashcamOpen(true)}
+                  className="glass" 
+                  style={{ background: 'rgba(56,189,248,0.1)', color: 'var(--primary)', border: '1px solid rgba(56,189,248,0.2)', padding: '8px 16px', borderRadius: 12, fontSize: '0.85rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+                >
+                  <Play size={16} fill="currentColor" /> Dashcam
+                </button>
+                <button 
+                  onClick={() => setIsSentinelOpen(true)}
+                  className="glass" 
+                  style={{ background: 'rgba(34,197,94,0.1)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.2)', padding: '8px 16px', borderRadius: 12, fontSize: '0.85rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+                >
+                  <Shield size={16} fill="currentColor" /> SENTINEL
+                </button>
+              </div>
+            </div>
             <div style={{ display: 'flex', gap: 10 }}>
               <button className="glass" style={{ flex: 1, padding: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--primary)', fontWeight: 700, cursor: 'pointer' }}
                 onClick={() => { setSubmitState('loading'); setTimeout(() => { submitReport() }, 1500) }}>
@@ -347,20 +469,31 @@ export default function App() {
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: 8, fontWeight: 600, fontSize: '0.9rem' }}>1. Capture Photo</label>
-              <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24, cursor: 'pointer', borderRadius: 'var(--radius-md)', border: '2px dashed var(--glass-border)', background: photoPreview ? 'transparent' : 'rgba(255,255,255,0.02)' }}>
-                {photoPreview ? (
-                  <img src={photoPreview} alt="preview" style={{ width: '100%', maxHeight: 200, objectFit: 'cover', borderRadius: 8 }} />
-                ) : (
-                  <>
+              {!photoPreview ? (
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <label style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '24px 12px', cursor: 'pointer', borderRadius: 'var(--radius-md)', border: '2px dashed var(--glass-border)', background: 'rgba(255,255,255,0.02)', transition: 'var(--transition)' }}>
                     <Camera size={32} color="var(--primary)" />
                     <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontWeight: 600 }}>Tap to open Camera</div>
-                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: 4 }}>AI will auto-crop and assess damage</div>
+                      <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>Camera</div>
                     </div>
-                  </>
-                )}
-                <input type="file" accept="image/*" capture="environment" onChange={handlePhotoChange} style={{ display: 'none' }} />
-              </label>
+                    <input type="file" accept="image/*" capture="environment" onChange={handlePhotoChange} style={{ display: 'none' }} />
+                  </label>
+                  <label style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '24px 12px', cursor: 'pointer', borderRadius: 'var(--radius-md)', border: '2px dashed var(--glass-border)', background: 'rgba(255,255,255,0.02)', transition: 'var(--transition)' }}>
+                    <Upload size={32} color="var(--text-secondary)" />
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--text-secondary)' }}>Gallery</div>
+                    </div>
+                    <input type="file" accept="image/*" onChange={handlePhotoChange} style={{ display: 'none' }} />
+                  </label>
+                </div>
+              ) : (
+                <div style={{ position: 'relative', width: '100%' }}>
+                  <img src={photoPreview} alt="preview" style={{ width: '100%', maxHeight: 220, objectFit: 'cover', borderRadius: 'var(--radius-md)', border: '1px solid var(--glass-border)' }} />
+                  <button onClick={() => { setPhotoPreview(null); setPhotoFile(null) }} style={{ position: 'absolute', top: 12, right: 12, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '50%', width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'white', transition: 'var(--transition)' }}>
+                    <X size={18} />
+                  </button>
+                </div>
+              )}
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: 8, fontWeight: 600, fontSize: '0.9rem' }}>2. Damage Type</label>
@@ -453,6 +586,7 @@ export default function App() {
                 { id: 'dashboard',   label: 'Impact Stats',  icon: Layout,      color: 'var(--primary)' },
                 { id: 'zones',       label: 'My Zones',      icon: MapPin,      color: 'var(--warning)' },
                 { id: 'leaderboard', label: 'Leaderboard',   icon: Trophy,      color: 'var(--success)' },
+                { id: 'rewards',     label: 'Marketplace',   icon: Gift,        color: 'var(--primary)' },
                 { id: 'commute',     label: 'Commutes',      icon: Clock,       color: '#3b82f6' },
                 { id: 'safety',      label: 'Safety Claim',  icon: Shield,      color: 'var(--danger)' },
                 { id: 'community',   label: 'Verification',  icon: CheckCircle, color: '#a78bfa' },
@@ -482,10 +616,26 @@ export default function App() {
                 </div>
               </div>
             </div>
+            <button 
+              onClick={logout}
+              className="glass" 
+              style={{ width: '100%', padding: '16px', marginTop: '12px', border: '1px solid rgba(239, 68, 68, 0.2)', color: '#fca5a5', fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: 'rgba(239, 68, 68, 0.05)' }}
+            >
+              <LogIn size={18} style={{ transform: 'rotate(180deg)' }} />
+              Secure Logout
+            </button>
             <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 10 }}>
               Member since Jan 2024 • Version 2.4.0
             </p>
           </div>
+        )}
+
+        {activeTab === 'rewards' && (
+          <RewardsView points={userPoints} onRedeem={(cost) => {
+            const newPts = userPoints - cost;
+            setUserPoints(newPts);
+            localStorage.setItem('rd_points', newPts);
+          }} />
         )}
 
         {activeTab === 'timeline' && (
@@ -528,6 +678,24 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {isDashcamOpen && (
+        <DashcamView 
+          onClose={() => setIsDashcamOpen(false)} 
+          onDetect={(detection) => {
+            handleAutoReport(detection.severity, detection.type);
+          }} 
+        />
+      )}
+
+      {isSentinelOpen && (
+        <SentinelView 
+          onClose={() => setIsSentinelOpen(false)} 
+          onDetect={(detection) => {
+             // Sentinel handles its own reporting for Elite features
+          }} 
+        />
+      )}
 
       {activeTab !== 'map' && (
         <button className="fab" onClick={() => setActiveTab('report')}>

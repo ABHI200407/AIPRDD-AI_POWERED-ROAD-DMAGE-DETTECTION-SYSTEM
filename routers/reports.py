@@ -1,15 +1,47 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 import uuid
+import io
 
 from database import get_db
 from models.report import RoadDamageReport
 from services.websocket_manager import manager
+from services.ai_pipeline import analyze_road_damage
+from services.auth import get_current_user
+from geopy.geocoders import Nominatim
+import functools
+
+geolocator = Nominatim(user_agent="road_safety_sentinel")
+
+@functools.lru_cache(maxsize=100)
+def get_area_name(lat: float, lon: float) -> str:
+    """Reverse geocode GPS to neighborhood/suburb name."""
+    try:
+        location = geolocator.reverse(f"{lat}, {lon}", exactly_one=True)
+        if location and location.raw.get('address'):
+            address = location.raw['address']
+            return address.get('suburb') or address.get('neighbourhood') or address.get('city_district') or "Unknown Area"
+    except:
+        pass
+    return "Unknown Area"
 
 router = APIRouter(prefix="/api/v1/reports", tags=["Reports"])
+
+@router.post("/analyze")
+async def analyze_image(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    """
+    Real-time AI analysis endpoint for direct image uploads.
+    Returns detected damage types and their severity.
+    """
+    try:
+        content = await file.read()
+        result = analyze_road_damage(content)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Pydantic models for incoming requests
 class LocationSchema(BaseModel):
@@ -47,13 +79,16 @@ class ReportCreate(BaseModel):
     telemetry: Optional[TelemetrySchema] = None
     assessment: AssessmentSchema
     gamification: Optional[GamificationSchema] = None
+    source: Optional[str] = "CITIZEN"
+    is_impact_verified: Optional[bool] = False
+    area_name: Optional[str] = None
 
 class ReportResponse(BaseModel):
     report_id: str
     status: str = "success"
 
 @router.post("", response_model=ReportResponse)
-async def create_report(report: ReportCreate, db: Session = Depends(get_db)):
+async def create_report(report: ReportCreate, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     db_report = RoadDamageReport(
         report_id=report.report_id or str(uuid.uuid4()),
         user_id=report.user_id,
@@ -98,17 +133,58 @@ async def create_report(report: ReportCreate, db: Session = Depends(get_db)):
         db_report.badge_progress_id = report.gamification.badge_progress_id
         db_report.is_first_reporter = report.gamification.is_first_reporter
 
+    # Sentinel Elite Logic
+    db_report.source = report.source
+    db_report.is_impact_verified = report.is_impact_verified
+    
+    # Auto-map to Area if not provided
+    if not report.area_name:
+        db_report.area_name = get_area_name(report.location.latitude, report.location.longitude)
+    else:
+        db_report.area_name = report.area_name
+
     db.add(db_report)
     db.commit()
     db.refresh(db_report)
     
+    # ─── PREDICTIVE DETERIORATION & LIVE WARNINGS ──────────────────────────
+    # 1. Deterioration Check (Compare with historical reports in 10m radius)
+    historical = db.query(RoadDamageReport).filter(
+        RoadDamageReport.latitude.between(db_report.latitude - 0.0001, db_report.latitude + 0.0001),
+        RoadDamageReport.longitude.between(db_report.longitude - 0.0001, db_report.longitude + 0.0001),
+        RoadDamageReport.report_id != db_report.report_id
+    ).order_by(RoadDamageReport.timestamp_captured.desc()).first()
+
+    if historical:
+        prev_sev = historical.user_confirmed_severity or historical.ai_suggested_severity or 1
+        curr_sev = db_report.user_confirmed_severity or db_report.ai_suggested_severity or 1
+        if curr_sev > prev_sev:
+            await manager.broadcast({
+                "type": "DETERIORATION_ALERT",
+                "area": db_report.area_name,
+                "growth": f"{((curr_sev - prev_sev) / prev_sev * 100):.0f}% increase",
+                "report_id": db_report.report_id
+            })
+
+    # 2. Live Warning Broadcast (To other drivers using the app)
+    if (db_report.ai_suggested_severity or 0) >= 4 or db_report.is_impact_verified:
+        await manager.broadcast({
+            "type": "HAZARD_ALERT",
+            "hazard_type": db_report.damage_type,
+            "severity": db_report.ai_suggested_severity or 5,
+            "lat": db_report.latitude,
+            "lon": db_report.longitude,
+            "msg": f"CAUTION: {db_report.damage_type} detected ahead!"
+        })
+    # ──────────────────────────────────────────────────────────────────────
+
     # Broadcast live event to government dashboard
     await manager.broadcast({"type": "NEW_REPORT", "report_id": db_report.report_id})
     
     return {"report_id": db_report.report_id, "status": "success"}
 
 @router.get("")
-def get_reports(min_lat: float, max_lat: float, min_lon: float, max_lon: float, db: Session = Depends(get_db)):
+def get_reports(min_lat: float, max_lat: float, min_lon: float, max_lon: float, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     # Simple bounding box query (mocking spatial search)
     reports = db.query(RoadDamageReport).filter(
         RoadDamageReport.latitude >= min_lat,

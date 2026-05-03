@@ -4,8 +4,9 @@ from pydantic import BaseModel
 from database import get_db
 from models.government import MasterTicket
 from services.websocket_manager import manager
+from services.auth import get_current_user
 
-router = APIRouter(prefix="/api/v1/telemetry", tags=["Telemetry"])
+router = APIRouter(prefix="/api/v1/telemetry", tags=["Telemetry"], dependencies=[Depends(get_current_user)])
 
 class AccelerometerData(BaseModel):
     ticket_id: str

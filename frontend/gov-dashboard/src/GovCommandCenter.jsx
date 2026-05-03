@@ -54,8 +54,8 @@ const fallbackCrews = [
 
 const inspectionData = [
   { source: 'Citizen AI', count: 124, color: '#38bdf8' },
-  { source: 'Fleet Sensors', count: 61, color: '#10b981' },
-  { source: 'Drone', count: 37, color: '#f59e0b' },
+  { source: 'Road Sentinel', count: 85, color: '#10b981' },
+  { source: 'Drone AI', count: 37, color: '#f59e0b' },
   { source: 'Inspector', count: 28, color: '#a78bfa' }
 ]
 
@@ -227,14 +227,14 @@ export default function GovCommandCenter({
           </div>
           <div className="command-table">
             <div className="command-table-head">
-              <span>Ticket</span><span>Severity</span><span>AI score</span><span>Duplicates</span><span>Status</span>
+              <span>Ticket</span><span>Area</span><span>Severity</span><span>AI score</span><span>Status</span>
             </div>
             {ticketSet.slice(0, 5).map((ticket) => (
               <div key={ticket.ticket_id} className="command-table-row">
                 <strong>{ticket.ticket_id.slice(0, 8)}</strong>
+                <span style={{ fontWeight: 700, color: '#94a3b8' }}>{ticket.area_name || "Hitech City"}</span>
                 <span>{Math.round(ticket.base_severity || 0)}/5</span>
                 <span className={(ticket.priority_score || 0) >= 80 ? 'danger-text' : 'warning-text'}>{ticket.priority_score?.toFixed?.(1) || ticket.priority_score}</span>
-                <span>{ticket.duplicate_count || 1} merged</span>
                 <span className={`badge ${ticket.status === 'IN_PROGRESS' ? 'badge-warning' : 'badge-critical'}`}>{ticket.status}</span>
               </div>
             ))}
