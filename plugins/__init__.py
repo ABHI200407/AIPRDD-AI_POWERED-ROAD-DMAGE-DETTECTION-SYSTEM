@@ -1,0 +1,1 @@
+# Makes plugins a package

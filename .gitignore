@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+
+# Databases
+*.db
+*.sqlite3
+
+# Node / Frontend
+node_modules/
+dist/
+.DS_Store
+
+# Large model files (optional, but keeping best.pt as it's < 100MB)
+# best.pt
+best.pt.zip
