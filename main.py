@@ -7,6 +7,22 @@ from routers import reports, routing, government, telemetry
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
+# --- SQLite Auto-Migration for new columns ---
+import sqlite3
+try:
+    conn = sqlite3.connect("road_safety.db")
+    cursor = conn.cursor()
+    # Safely add columns if they don't exist
+    for col in ["verification_count", "fixed_confirmation_count"]:
+        try:
+            cursor.execute(f"ALTER TABLE road_damage_reports ADD COLUMN {col} INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass # Already exists
+    conn.commit()
+    conn.close()
+except Exception as e:
+    print(f"Migration notice: {e}")
+
 import os
 import logging
 from dotenv import load_dotenv

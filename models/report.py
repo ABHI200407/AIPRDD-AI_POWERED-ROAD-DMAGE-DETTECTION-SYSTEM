@@ -44,6 +44,8 @@ class RoadDamageReport(Base):
     # Sentinel Elite Features
     area_name = Column(String)  # Neighborhood (Hitech City, Abids, etc.)
     is_impact_verified = Column(Boolean, default=False) # Vision + Vibration match
+    verification_count = Column(Integer, default=0)
+    fixed_confirmation_count = Column(Integer, default=0)
 
 
 class MaintenanceHistory(Base):

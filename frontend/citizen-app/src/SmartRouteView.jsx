@@ -17,8 +17,9 @@ import {
 import L from 'leaflet'
 import NavigationMap from './components/NavigationMap'
 import 'leaflet/dist/leaflet.css'
+import { API_BASE, fetchWithAuth } from './api'
 
-const API = 'http://192.168.253.155:8000/api/v1'
+const API = API_BASE
 const OSRM = 'https://router.project-osrm.org/route/v1'
 
 const VEHICLES = [
@@ -200,7 +201,7 @@ async function fetchRoadRoutes(origin, destination, vehicleId, modeId, safetyDat
 
 async function fetchSafetyMetadata(origin, destination, vehicleId, modeId) {
   try {
-    const response = await fetch(`${API}/routing/calculate`, {
+    const response = await fetchWithAuth(`${API}/routing/calculate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

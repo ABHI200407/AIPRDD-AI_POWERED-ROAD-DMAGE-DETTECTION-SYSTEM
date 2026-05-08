@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Popup, Marker, useMap, ScaleControl, LayersControl } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
@@ -18,10 +18,10 @@ import ClaimHelper from './ClaimHelper'
 import CommuteView from './CommuteView'
 import ARView from './ARView'
 import { Map, Camera, User, AlertTriangle, CheckCircle, Upload, Mic, Clock, Star, Shield, Wifi, WifiOff, Navigation, Layout, Trophy, MapPin, FileText, Settings, X, Gift, LogIn, Play } from 'lucide-react'
-import { auth } from './firebase'
+import { API_BASE, fetchWithAuth, getWebSocketUrl } from './api'
 import './App.css'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1'
+const API = API_BASE
 
 // ─── OFFLINE QUEUE (IndexedDB-like via localStorage) ───────────────────────
 const QUEUE_KEY = 'rd_offline_queue'
@@ -31,14 +31,6 @@ const addToQueue = (report) => {
 }
 const clearQueue = () => localStorage.setItem(QUEUE_KEY, '[]')
 
-const fetchWithAuth = async (url, options = {}) => {
-  const headers = { ...options.headers };
-  if (auth.currentUser) {
-    const token = await auth.currentUser.getIdToken();
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  return fetch(url, { ...options, headers });
-}
 
 // ─── BADGES CONFIG ──────────────────────────────────────────────────────────
 const BADGES = [
@@ -124,6 +116,42 @@ export default function App() {
   const [isDashcamOpen, setIsDashcamOpen] = useState(false)
   const [isSentinelOpen, setIsSentinelOpen] = useState(false)
   const [liveAlert, setLiveAlert] = useState(null)
+  const [verificationReports, setVerificationReports] = useState([])
+  const [verificationStatus, setVerificationStatus] = useState('Loading nearby reports...')
+
+  const loadNearbyReports = useCallback(async () => {
+    setVerificationStatus('Searching for nearby reports...')
+    try {
+      const loc = await getCurrentReportLocation()
+      const radius = 0.05
+      const params = new URLSearchParams({
+        min_lat: String(loc.latitude - radius),
+        max_lat: String(loc.latitude + radius),
+        min_lon: String(loc.longitude - radius),
+        max_lon: String(loc.longitude + radius),
+      })
+      const res = await fetchWithAuth(`${API}/reports?${params.toString()}`)
+      const data = await res.json()
+      const items = (data.data || []).filter(r => !r.is_flagged)
+      setVerificationReports(items)
+      setVerificationStatus(items.length ? `${items.length} reports nearby.` : 'No reports found nearby.')
+    } catch {
+      setVerificationStatus('Failed to load nearby reports.')
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === 'community') loadNearbyReports()
+  }, [activeTab, loadNearbyReports])
+
+  async function applyVerification(reportId, action) {
+    try {
+      await fetchWithAuth(`${API}/reports/${reportId}/${action}`, { method: 'POST' })
+      loadNearbyReports()
+    } catch {
+      alert('Verification failed.')
+    }
+  }
   
   const handleOnboardingComplete = () => {
     localStorage.setItem('alive_onboarded', 'true')
@@ -151,6 +179,8 @@ export default function App() {
           handleAutoReport(variance)
         }
       }
+    }
+
     if (window.DeviceMotionEvent) {
       window.addEventListener('devicemotion', handleMotion)
     } else {
@@ -165,7 +195,7 @@ export default function App() {
   }, [isShadowActive])
 
   useEffect(() => {
-    const socket = new WebSocket(`ws://${window.location.host}/ws/citizen`);
+    const socket = new WebSocket(getWebSocketUrl());
     socket.onmessage = (event) => {
       const msg = JSON.parse(event.data);
       if (msg.type === 'HAZARD_ALERT') {
@@ -542,25 +572,31 @@ export default function App() {
         )}
 
         {activeTab === 'community' && (
-          <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <h3>Community Verification</h3>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Confirm if nearby reports are still present</p>
-            {MOCK_HAZARDS.map(h => (
-              <div key={h.id} className="glass" style={{ padding: 16 }}>
+          <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16, paddingBottom: 100 }}>
+            <div className="flex justify-between items-center">
+              <h3>Community Verification</h3>
+              <button onClick={loadNearbyReports} className="badge badge-info" style={{ border: 'none', cursor: 'pointer' }}>Refresh</button>
+            </div>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{verificationStatus}</p>
+            {verificationReports.map(r => (
+              <div key={r.report_id} className="glass" style={{ padding: 16 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
                   <div>
-                    <div style={{ fontWeight: 600 }}>{h.type.replace('_', ' ')}</div>
-                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: 4 }}>Severity {h.severity} • {(Math.random() * 800 + 50).toFixed(0)}m away</div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    {[1,2,3,4,5].map(s => <Star key={s} size={14} fill={s <= h.severity ? 'var(--warning)' : 'none'} color={s <= h.severity ? 'var(--warning)' : 'var(--text-muted)'} />)}
+                    <div style={{ fontWeight: 600 }}>{(r.damage_type || 'ROAD_DAMAGE').replace('_', ' ')}</div>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: 4 }}>
+                      Severity {r.user_confirmed_severity || r.ai_suggested_severity || 3} • {r.verification_count || 0} confirmations
+                    </div>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 10 }}>
-                  <button onClick={() => setVerifyTarget(h.id)} style={{ flex: 1, padding: '9px', borderRadius: 'var(--radius-sm)', border: 'none', background: verifyTarget === h.id ? 'rgba(239,68,68,0.2)' : 'rgba(239,68,68,0.08)', color: '#fca5a5', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem', transition: 'var(--transition)' }}>
+                  <button 
+                    onClick={() => applyVerification(r.report_id, 'verify')}
+                    style={{ flex: 1, padding: '9px', borderRadius: 'var(--radius-sm)', border: 'none', background: 'rgba(56,189,248,0.1)', color: 'var(--primary)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}>
                     ⚠️ Still There
                   </button>
-                  <button style={{ flex: 1, padding: '9px', borderRadius: 'var(--radius-sm)', border: 'none', background: 'rgba(16,185,129,0.08)', color: '#6ee7b7', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}>
+                  <button 
+                    onClick={() => applyVerification(r.report_id, 'fix-verify')}
+                    style={{ flex: 1, padding: '9px', borderRadius: 'var(--radius-sm)', border: 'none', background: 'rgba(16,185,129,0.1)', color: 'var(--success)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}>
                     ✅ Fixed Now
                   </button>
                 </div>

@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { Camera, X, Shield, AlertTriangle, Play, Pause, Zap, Moon, Sun, Battery, Thermometer, WifiOff } from 'lucide-react';
 import { auth } from './firebase';
+import { API_BASE } from './api';
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+const API = API_BASE;
 
 export default function SentinelView({ onClose, onDetect }) {
   const [isActive, setIsActive] = useState(false);
@@ -64,7 +65,7 @@ export default function SentinelView({ onClose, onDetect }) {
     return () => clearInterval(interval);
   }, [isActive, isProcessing, isNightMode]);
 
-  const captureAndAnalyze = async () => {
+  async function captureAndAnalyze() {
     if (!videoRef.current || !canvasRef.current) return;
     
     setIsProcessing(true);
@@ -114,7 +115,7 @@ export default function SentinelView({ onClose, onDetect }) {
         setIsProcessing(false);
       }
     }, 'image/jpeg', 0.7);
-  };
+  }
 
   const reportToGov = async (detection) => {
     const payload = {

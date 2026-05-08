@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { Camera, X, Shield, AlertTriangle, Play, Pause, Zap } from 'lucide-react';
 import { auth } from './firebase';
+import { API_BASE } from './api';
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1'; // Standard API base from App.jsx
+const API = API_BASE;
 
 export default function DashcamView({ onClose, onDetect }) {
   const [isActive, setIsActive] = useState(false);
@@ -39,7 +40,7 @@ export default function DashcamView({ onClose, onDetect }) {
     return () => clearInterval(interval);
   }, [isActive, isProcessing]);
 
-  const captureAndAnalyze = async () => {
+  async function captureAndAnalyze() {
     if (!videoRef.current || !canvasRef.current) return;
     
     setIsProcessing(true);
@@ -97,7 +98,7 @@ export default function DashcamView({ onClose, onDetect }) {
     } else {
         setIsProcessing(false);
     }
-  };
+  }
 
   return (
     <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: '#000', zIndex: 10000, display: 'flex', flexDirection: 'column' }}>

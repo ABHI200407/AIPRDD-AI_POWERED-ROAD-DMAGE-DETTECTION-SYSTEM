@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { MapContainer, TileLayer, Marker, Popup, Polyline, CircleMarker, LayersControl, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import { Navigation, RefreshCw, Route } from 'lucide-react'
+import { apiFetch } from './api'
 
 function MapController({ coords }) {
   const map = useMap()
@@ -23,7 +24,7 @@ export default function RepairRouteTab() {
   const generateRoute = async () => {
     setLoading(true)
     try {
-      const res = await fetch('http://localhost:8000/api/v1/gov/repair-route', {
+      const res = await apiFetch('/repair-route', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ crew_lat: crewLat, crew_lon: crewLon, max_stops: maxStops })

@@ -14,9 +14,9 @@ from plugins.hardware_drone import run_drone_survey
 from plugins.weather_api import get_weather_forecast
 import uuid
 from datetime import datetime, timezone
-from services.auth import get_current_user
+from services.auth import require_admin
 
-router = APIRouter(prefix="/api/v1/gov", tags=["Government AI Dashboard"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/api/v1/gov", tags=["Government AI Dashboard"], dependencies=[Depends(require_admin)])
 
 
 # ─── TICKETS ──────────────────────────────────────────────────────────────────

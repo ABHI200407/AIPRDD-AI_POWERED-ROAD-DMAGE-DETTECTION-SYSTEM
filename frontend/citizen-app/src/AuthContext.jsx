@@ -29,12 +29,19 @@ export function AuthProvider({ children }) {
     }
   };
 
+  const loginAsGuest = () => {
+    const guestUser = { id: 'guest_' + Math.random().toString(36).substr(2, 9), type: 'guest', displayName: 'Guest Driver' };
+    setCurrentUser(guestUser);
+    localStorage.setItem('alive_guest', JSON.stringify(guestUser));
+  };
+
   const value = {
     user: currentUser,
     isAuthenticated: !!currentUser,
-    isGuest: false,
+    isGuest: currentUser?.type === 'guest',
     loading,
-    logout
+    logout,
+    loginAsGuest
   };
 
   return (

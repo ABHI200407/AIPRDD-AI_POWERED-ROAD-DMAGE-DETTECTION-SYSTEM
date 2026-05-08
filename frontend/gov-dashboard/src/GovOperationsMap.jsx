@@ -84,7 +84,7 @@ export default function GovOperationsMap({ tickets = [], crews = [], onRunDbscan
       </div>
 
       <MapContainer
-        center={[19.076, 72.877]}
+        center={[17.40, 78.48]}
         zoom={12}
         zoomControl={false}
         style={{ height: '100%', width: '100%' }}
@@ -125,7 +125,7 @@ export default function GovOperationsMap({ tickets = [], crews = [], onRunDbscan
         {showCrews && activeCrews.map((item, index) => (
           <Marker
             key={item.crew.id}
-            position={[19.076 + index * 0.012, 72.877 + index * 0.014]}
+            position={[17.40 + index * 0.012, 78.48 + index * 0.014]}
             icon={crewIcon}
           >
             <Popup>

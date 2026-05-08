@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { CheckCircle, Plus } from 'lucide-react'
+import { apiFetch } from './api'
 
 const ACTION_TYPES = ['REPORTED', 'INSPECTED', 'PATCHED', 'RESURFACED', 'CLOSED']
 const ACTION_COLORS = { REPORTED: 'badge-info', INSPECTED: 'badge-warning', PATCHED: 'badge-warning', RESURFACED: 'badge-success', CLOSED: 'badge-success' }
@@ -14,23 +15,23 @@ export default function MaintenanceHistoryTab({ tickets }) {
 
   const fetchHistory = async (ticketId) => {
     if (!ticketId) return
-    const res = await fetch(`http://localhost:8000/api/v1/gov/history/${ticketId}`)
+    const res = await apiFetch(`/history/${ticketId}`)
     const data = await res.json()
     setHistory(data.history || [])
   }
 
   const fetchAll = async () => {
-    const res = await fetch('http://localhost:8000/api/v1/gov/history')
+    const res = await apiFetch('/history')
     const data = await res.json()
     setAllHistory(data.data || [])
   }
 
-  useState(() => { fetchAll() }, [])
+  useEffect(() => { fetchAll() }, [])
 
   const addHistory = async () => {
     if (!selectedTicket) { alert('Select a ticket first'); return }
     setLoading(true)
-    await fetch('http://localhost:8000/api/v1/gov/history', {
+    await apiFetch('/history', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticket_id: selectedTicket, ...form })

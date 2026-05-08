@@ -139,3 +139,27 @@ async def create_report(report: ReportCreate, db: Session = Depends(get_db), use
 def get_reports(min_lat: float, max_lat: float, min_lon: float, max_lon: float, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     reports = db.query(RoadDamageReport).filter(RoadDamageReport.latitude >= min_lat, RoadDamageReport.latitude <= max_lat, RoadDamageReport.longitude >= min_lon, RoadDamageReport.longitude <= max_lon).all()
     return {"data": reports}
+
+
+@router.post("/{report_id}/verify")
+def verify_report(report_id: str, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    report = db.query(RoadDamageReport).filter(RoadDamageReport.report_id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    report.verification_count += 1
+    db.commit()
+    db.refresh(report)
+    return report
+
+
+@router.post("/{report_id}/fix-verify")
+def fix_verify_report(report_id: str, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    report = db.query(RoadDamageReport).filter(RoadDamageReport.report_id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    report.fixed_confirmation_count += 1
+    if report.fixed_confirmation_count >= 3:
+        report.is_flagged = True
+    db.commit()
+    db.refresh(report)
+    return report

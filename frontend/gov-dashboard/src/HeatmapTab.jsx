@@ -5,6 +5,7 @@ import L from 'leaflet'
 import 'leaflet.heat'
 import MarkerClusterGroup from 'react-leaflet-cluster'
 import { Layers, Map as MapIcon, ShieldAlert } from 'lucide-react'
+import { apiFetchBase } from './api'
 
 const { BaseLayer, Overlay } = LayersControl
 
@@ -42,7 +43,7 @@ export default function HeatmapTab() {
   const [viewMode, setViewMode] = useState('HEATMAP') // HEATMAP | CLUSTERS
 
   useEffect(() => {
-    fetch('http://localhost:8000/api/v1/routing/road-health/all')
+    apiFetchBase('/routing/road-health/all')
       .then(r => r.json())
       .then(d => {
         setHeatData(d.heatmap_points || [])

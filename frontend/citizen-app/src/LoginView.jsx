@@ -117,6 +117,14 @@ export default function LoginView({ onLogin, onGuest }) {
                 Phone Number (OTP)
               </button>
 
+              <button 
+                onClick={onGuest} 
+                style={{ width: '100%', padding: '16px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.02)', color: '#94a3b8', fontWeight: 700, fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, cursor: 'pointer', transition: 'all 0.2s' }}
+              >
+                Continue as Guest
+                <ChevronRight size={18} />
+              </button>
+
             </>
           )}
 

@@ -35,8 +35,9 @@ import {
 } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { API_BASE, fetchWithAuth } from './api'
 
-const API = 'http://192.168.253.155:8000/api/v1'
+const API = API_BASE
 const OSRM = 'https://router.project-osrm.org/route/v1/driving'
 
 const VEHICLES = [
@@ -337,7 +338,7 @@ export default function AdvancedMapView({ myReports = [], onReport }) {
     fetchId.current = requestId
     setLoading(true)
     try {
-      const response = await fetch(`${API}/reports?${getBoundsQuery(map).toString()}`)
+      const response = await fetchWithAuth(`${API}/reports?${getBoundsQuery(map).toString()}`)
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const data = await response.json()
       if (fetchId.current !== requestId) return
@@ -356,23 +357,43 @@ export default function AdvancedMapView({ myReports = [], onReport }) {
     }
   }, [])
 
-  const locateUser = useCallback(() => {
+  const watchId = useRef(null)
+  const isFirstFix = useRef(true)
+
+  const locateUser = useCallback((setView = true) => {
     if (!('geolocation' in navigator)) {
       setStatus('Live location is not available in this browser.')
       return
     }
 
-    navigator.geolocation.getCurrentPosition(
+    if (watchId.current) navigator.geolocation.clearWatch(watchId.current)
+
+    watchId.current = navigator.geolocation.watchPosition(
       (position) => {
         const next = [position.coords.latitude, position.coords.longitude]
         setUserPos(next)
-        mapRef.current?.setView(next, 16, { animate: true })
-        setStatus(`Live location active, accuracy ${Math.round(position.coords.accuracy)}m.`)
+        
+        if (setView && (isFirstFix.current || !isFreeLook)) {
+          mapRef.current?.setView(next, isFirstFix.current ? 16 : mapRef.current.getZoom(), { animate: true })
+          isFirstFix.current = false
+        }
+        
+        setStatus(`Live tracking active (±${Math.round(position.coords.accuracy)}m)`)
+        setLocationStatus('granted')
       },
-      () => setStatus('Allow location access to recenter the map.'),
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 1000 }
+      (error) => {
+        console.error('GPS Error:', error)
+        setStatus('GPS signal lost or denied.')
+        setLocationStatus('denied')
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     )
-  }, [])
+  }, [isFreeLook])
+
+  useEffect(() => {
+    locateUser(true)
+    return () => { if (watchId.current) navigator.geolocation.clearWatch(watchId.current) }
+  }, [locateUser])
 
   const calculateRoute = useCallback(async (nextDestination, nextVehicle = vehicle, nextRouteMode = routeMode) => {
     if (!nextDestination) return
@@ -543,7 +564,20 @@ export default function AdvancedMapView({ myReports = [], onReport }) {
               <div className="advanced-popup">
                 <strong>{report.type.replaceAll('_', ' ')}</strong>
                 <span>Severity {report.severity}/5</span>
-                <em>{report.source === 'backend' ? 'Verified report' : 'Local report'}</em>
+                <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); fetchWithAuth(`${API}/reports/${report.id}/verify`, {method:'POST'}).then(() => refreshReports()) }}
+                    className="verify-btn mini"
+                  >
+                    Verify
+                  </button>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); fetchWithAuth(`${API}/reports/${report.id}/fix-verify`, {method:'POST'}).then(() => refreshReports()) }}
+                    className="verify-btn mini fixed"
+                  >
+                    Fixed
+                  </button>
+                </div>
               </div>
             </Popup>
           </CircleMarker>

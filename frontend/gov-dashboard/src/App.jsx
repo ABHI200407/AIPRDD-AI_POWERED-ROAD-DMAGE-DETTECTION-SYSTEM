@@ -15,9 +15,8 @@ import MaintenanceHistoryTab from './MaintenanceHistoryTab'
 import AdversarialCenter from './AdversarialCenter'
 import GovCommandCenter from './GovCommandCenter'
 import GovOperationsMap from './GovOperationsMap'
+import { apiFetch, getWebSocketUrl } from './api'
 import './App.css'
-
-const API = 'http://localhost:8000/api/v1/gov'
 
 function App() {
   const [activeTab, setActiveTab] = useState('command')
@@ -38,47 +37,47 @@ function App() {
 
   const fetchTickets = async () => {
     setLoad('tickets', true)
-    try { const r = await fetch(`${API}/tickets`); const d = await r.json(); setTickets(d.data) } catch {}
+    try { const r = await apiFetch('/tickets'); const d = await r.json(); setTickets(d.data) } catch {}
     setLoad('tickets', false)
   }
 
   const fetchCrews = async () => {
-    try { const r = await fetch(`${API}/crews`); const d = await r.json(); setCrews(d.data) } catch {}
+    try { const r = await apiFetch('/crews'); const d = await r.json(); setCrews(d.data) } catch {}
   }
 
   const fetchSla = async () => {
-    try { const r = await fetch(`${API}/sla`); const d = await r.json(); setSla(d) } catch {}
+    try { const r = await apiFetch('/sla'); const d = await r.json(); setSla(d) } catch {}
   }
 
   const fetchBudget = async () => {
-    try { const r = await fetch(`${API}/budget`); const d = await r.json(); setBudget(d) } catch {}
+    try { const r = await apiFetch('/budget'); const d = await r.json(); setBudget(d) } catch {}
   }
 
   const fetchFraud = async () => {
-    try { const r = await fetch(`${API}/fraud`); const d = await r.json(); setFraud(d) } catch {}
+    try { const r = await apiFetch('/fraud'); const d = await r.json(); setFraud(d) } catch {}
   }
 
   const fetchWeather = async () => {
-    try { const r = await fetch(`${API}/weather`); const d = await r.json(); setWeather(d) } catch {}
+    try { const r = await apiFetch('/weather'); const d = await r.json(); setWeather(d) } catch {}
   }
 
   const runDbscan = async () => {
     setLoad('cluster', true)
-    await fetch(`${API}/clusters/generate`, { method: 'POST' })
+    await apiFetch('/clusters/generate', { method: 'POST' })
     await fetchTickets()
     setLoad('cluster', false)
   }
 
   const autoDispatch = async () => {
     setLoad('dispatch', true)
-    await fetch(`${API}/dispatch`, { method: 'POST' })
+    await apiFetch('/dispatch', { method: 'POST' })
     await fetchCrews()
     setLoad('dispatch', false)
   }
 
   const runDroneSurvey = async () => {
     setLoad('drone', true)
-    const r = await fetch(`${API}/drone-survey`, {
+    const r = await apiFetch('/drone-survey', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ center_lat: 19.076, center_lon: 72.877, radius_km: 3.0 })
@@ -92,7 +91,7 @@ function App() {
   useEffect(() => {
     fetchTickets(); fetchCrews(); fetchSla(); fetchBudget(); fetchFraud(); fetchWeather()
 
-    const ws = new WebSocket('ws://localhost:8000/ws')
+    const ws = new WebSocket(getWebSocketUrl('/ws'))
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data)
